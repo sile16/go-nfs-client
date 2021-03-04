@@ -1,3 +1,3 @@
-module github.com/joshuarobinon/go-nfs-client
+module github.com/joshuarobinson/go-nfs-client
 
 go 1.15
