@@ -8,9 +8,9 @@ import (
 	"io"
 	"os"
 
-	"github.com/llaaiiqq/go-nfs-client/nfs/rpc"
-	"github.com/llaaiiqq/go-nfs-client/nfs/util"
-	"github.com/llaaiiqq/go-nfs-client/nfs/xdr"
+	"github.com/joshuarobinson/go-nfs-client/nfs/rpc"
+	"github.com/joshuarobinson/go-nfs-client/nfs/util"
+	"github.com/joshuarobinson/go-nfs-client/nfs/xdr"
 )
 
 // File wraps the NfsProc3Read and NfsProc3Write methods to implement a
