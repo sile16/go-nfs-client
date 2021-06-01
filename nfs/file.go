@@ -20,7 +20,7 @@ type File struct {
 
 	// current position
 	curr   uint64
-    size   int64
+	size   int64
 	fsinfo *FSInfo
 
 	// filehandle to the file
@@ -239,7 +239,7 @@ func (f *File) Seek(offset int64, whence int) (int64, error) {
 		f.curr = uint64(int64(f.curr) + offset)
 		return int64(f.curr), nil
 	case io.SeekEnd:
-        return f.size, nil
+		return f.size, nil
 	default:
 		// This indicates serious programming error
 		return int64(f.curr), errors.New("Invalid whence")
@@ -279,7 +279,7 @@ func (v *Target) Open(path string) (*File, error) {
 	f := &File{
 		Target: v,
 		fsinfo: v.fsinfo,
-        size:   info.Size(),
+		size:   info.Size(),
 		fh:     fh,
 	}
 
