@@ -13,9 +13,9 @@ import (
 	"os"
 	"strings"
 
-	"github.com/joshuarobinson/go-nfs-client/nfs"
-	"github.com/joshuarobinson/go-nfs-client/nfs/rpc"
-	"github.com/joshuarobinson/go-nfs-client/nfs/util"
+	"github.com/sile16/go-nfs-client/nfs"
+	"github.com/sile16/go-nfs-client/nfs/rpc"
+	"github.com/sile16/go-nfs-client/nfs/util"
 )
 
 func main() {
