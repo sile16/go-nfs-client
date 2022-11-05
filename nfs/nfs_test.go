@@ -1,6 +1,5 @@
 // Copyright © 2017 VMware, Inc. All Rights Reserved.
 // SPDX-License-Identifier: BSD-2-Clause
-//
 package nfs
 
 import (
@@ -12,7 +11,7 @@ import (
 
 func listenAndServe(t *testing.T, port int) (*net.TCPListener, *sync.WaitGroup, error) {
 
-	addr, err := net.ResolveTCPAddr("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+	addr, _ := net.ResolveTCPAddr("tcp", fmt.Sprintf("127.0.0.1:%d", port))
 	l, err := net.ListenTCP("tcp", addr)
 	if err != nil {
 		return nil, nil, err

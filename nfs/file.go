@@ -242,7 +242,7 @@ func (f *File) Seek(offset int64, whence int) (int64, error) {
 		return f.size, nil
 	default:
 		// This indicates serious programming error
-		return int64(f.curr), errors.New("Invalid whence")
+		return int64(f.curr), errors.New("invalid whence")
 	}
 }
 
