@@ -3,6 +3,7 @@
 package rpc
 
 import (
+	"bytes"
 	"encoding/binary"
 	"fmt"
 	"io"
@@ -21,7 +22,7 @@ type tcpTransport struct {
 
 // Get the response from the conn, buffer the contents, and return a reader to
 // it.
-func (t *tcpTransport) recv(recv_buf []byte) (error) {
+func (t *tcpTransport) recv() (io.ReadSeeker, error) {
 	t.rlock.Lock()
 	defer t.rlock.Unlock()
 	if t.timeout != 0 {
@@ -32,22 +33,22 @@ func (t *tcpTransport) recv(recv_buf []byte) (error) {
 	// Read just first 32 bytes, to get RPC length.
 	var hdr uint32
 	if err := binary.Read(t.r, binary.BigEndian, &hdr); err != nil {
-		return err
+		return nil, err
 	}
 
-	// Old buf allocation, added to the struct so not allocated on every call.
-	//buf := make([]byte, hdr&0x7fffffff) 
-	//assert(len(buf) < 1024*1024, "RPC response too large")
 	rpc_len := hdr&0x7fffffff
-	if int(rpc_len) > len(recv_buf) {
-		return fmt.Errorf("RPC response too large, buffer: %d, response: %d", len(recv_buf), rpc_len)
+	buf := make([]byte, rpc_len) 
+	
+	
+	if int(rpc_len) > 520*1024 {
+		return nil, fmt.Errorf("RPC response larger than 520k, response: %d", rpc_len)
 	}
 
-	if _, err := io.ReadFull(t.r, recv_buf[0:rpc_len]); err != nil {
-		return err
+	if _, err := io.ReadFull(t.r, buf); err != nil {
+		return nil, err
 	}
 	
-	return nil
+	return bytes.NewReader(buf), nil
 
 }
 
