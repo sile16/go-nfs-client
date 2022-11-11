@@ -17,7 +17,10 @@
 
 package util
 
-import "log"
+import (
+	
+	log "github.com/sirupsen/logrus"
+)
 
 var DefaultLogger Logger
 
@@ -45,9 +48,9 @@ func (l *logger) Errorf(format string, args ...interface{}) {
 }
 
 func (l *logger) Debugf(format string, args ...interface{}) {
-	if !l.DebugLevel {
-		return
-	}
+	//if !l.DebugLevel {
+	//	return
+	//}
 
 	log.Printf(format, args...)
 }

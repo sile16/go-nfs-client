@@ -12,6 +12,7 @@ import (
 	"github.com/sile16/go-nfs-client/nfs/rpc"
 	"github.com/sile16/go-nfs-client/nfs/util"
 	"github.com/sile16/go-nfs-client/nfs/xdr"
+
 )
 
 // File wraps the NfsProc3Read and NfsProc3Write methods to implement a
@@ -88,8 +89,8 @@ func (f *File) ReadFrom(r io.Reader) (int64, error) {
 		WriteVerf uint64
 	}
 
-	chunk_chan := make(chan []byte, 50)
-	rpc_chan := make(chan *rpc.Rpc_call, 8)
+	chunk_chan := make(chan []byte, f.Target.Client.Rpc_depth)
+	rpc_chan := make(chan *rpc.Rpc_call, f.Target.Client.Rpc_depth)
 	//rpc_reply := make(chan bool, 8)
 	//done_chan := make(chan bool, 1)
 	
@@ -100,13 +101,16 @@ func (f *File) ReadFrom(r io.Reader) (int64, error) {
 	
 	// Read rpc replies
 	written_confirmed := uint32(0)
-	wg := sync.WaitGroup{}
-	wg.Add(1)
+	all_rpc_replies_received := sync.WaitGroup{}
+	all_rpc_replies_received.Add(1)
 
+	// get rpc replies
 	go func() {
-		defer wg.Done()
+		defer all_rpc_replies_received.Done()
+		util.Debugf("NFS File ReadFrom: start liesting for rpc replies.")
 		
 		for rpccall := range rpc_chan {
+			util.Debugf("NFS File ReadFrom: RPC Reply")
 
 				writeres := &WriteRes{}
 				
@@ -137,40 +141,50 @@ func (f *File) ReadFrom(r io.Reader) (int64, error) {
 	//written := uint32(0)
 	go func() {
 		defer all_sent.Store(true)
+		util.Debugf("NFS File ReadFrom: starting to send RPCs")
 		
 		for chunk := range chunk_chan {
-			total_rpc_calls.Add(1)
 			
-			writeSize := uint32(len(chunk))
+			totalToWrite := uint32(len(chunk))
+			util.Debugf("NFS File ReadFrom: Sending RPC chunk: %d", totalToWrite)
 			
-			rpccall := f.Go(&WriteArgs{
-				Header: rpc.Header{
-					Rpcvers: 2,
-					Prog:    Nfs3Prog,
-					Vers:    Nfs3Vers,
-					Proc:    NFSProc3Write,
-					Cred:    f.auth,
-					Verf:    rpc.AuthNull,
-				},
-				FH:       f.fh,
-				Offset:   f.curr,
-				Count:    writeSize,
-				How:      2,
-				Contents: chunk,
-			}, rpc_chan)
+			for written := uint32(0); written < totalToWrite; {
+				total_rpc_calls.Add(1)
+				writeSize := min(f.fsinfo.WTPref, totalToWrite-written)
+			
+				
+				
+				rpccall := f.Go(&WriteArgs{
+					Header: rpc.Header{
+						Rpcvers: 2,
+						Prog:    Nfs3Prog,
+						Vers:    Nfs3Vers,
+						Proc:    NFSProc3Write,
+						Cred:    f.auth,
+						Verf:    rpc.AuthNull,
+					},
+					FH:       f.fh,
+					Offset:   f.curr,
+					Count:    writeSize,
+					How:      2,
+					Contents: chunk,
+				}, rpc_chan)
 
-			if rpccall.Error != nil {
-				util.Errorf("write(%x): %s", f.fh, rpccall.Error.Error())
-				break
+				if rpccall.Error != nil {
+					util.Errorf("write(%x): %s", f.fh, rpccall.Error.Error())
+					break
+				}
+
+				f.curr += uint64(writeSize)
+				written += uint32(writeSize)
 			}
-
-			f.curr += uint64(writeSize)
-			//written += uint64(writeSize)
 		}
+		util.Debugf("NFS File ReadFrom: done sending RPCs")
 	}()
 
 	// Read the input stream until EOF
 	go func() {	
+		util.Debugf("NFS File ReadFrom: starting to read from input stream")
 		for {
 			//todo: a pool of buffers again?
 			buf := make([]byte, f.fsinfo.WTPref)
@@ -181,13 +195,15 @@ func (f *File) ReadFrom(r io.Reader) (int64, error) {
 				}
 				
 			}
+			util.Debugf("NFS File ReadFrom: Read %d from stream sending to channel", n)
 			chunk_chan <- buf[:n]
 		}
 		close(chunk_chan)
 		
 	}()
 
-	wg.Wait()
+	all_rpc_replies_received.Wait()
+
 	return int64(written_confirmed), nil
 }
 

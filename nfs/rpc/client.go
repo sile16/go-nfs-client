@@ -47,7 +47,7 @@ type Client struct {
 	reqMutex sync.Mutex
 	mutex sync.Mutex
 
-	rpc_depth int // number of outstanding RPCs
+	Rpc_depth int // number of outstanding RPCs
 
 	// buffer pool for replies
 	replyPool *sync.Pool
@@ -91,7 +91,7 @@ func DialTCPDepth(network string, ldr *net.TCPAddr, addr string, rpc_depth int) 
 	client := &Client{
 		tcpTransport: t,
 		reqMutex:     sync.Mutex{},
-		rpc_depth:    rpc_depth,
+		Rpc_depth:    rpc_depth,
 		replyPool:    &bufPool,
 		buf:          []byte{},
 		pending:      make(map[uint32]*Rpc_call),
