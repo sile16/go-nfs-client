@@ -55,9 +55,8 @@ func NewTarget(addr string, auth rpc.Auth, fh []byte, dirpath string, priv bool)
 	return vol, nil
 }
 
-// wraps the Call function to check status and decode errors
-func (v *Target) call(c interface{}) (io.ReadSeeker, error) {
-	res, err := v.Call(c)
+func (v *Target) NfsReadResponse(res io.ReadSeeker, err error) (io.ReadSeeker, error) {
+	
 	if err != nil {
 		return nil, err
 	}
@@ -72,6 +71,12 @@ func (v *Target) call(c interface{}) (io.ReadSeeker, error) {
 	}
 
 	return res, nil
+}
+
+// wraps the Call function to check status and decode errors
+func (v *Target) call(c interface{}) (io.ReadSeeker, error) {
+	res, err := v.Call(c)
+	return v.NfsReadResponse(res, err)
 }
 
 func (v *Target) FSInfo() (*FSInfo, error) {
@@ -324,7 +329,7 @@ func (v *Target) Mkdir(path string, perm os.FileMode) ([]byte, error) {
 	mkdirres := new(MkdirOk)
 	if err := xdr.Read(res, mkdirres); err != nil {
 		util.Errorf("mkdir(%s) failed to parse return: %s", path, err)
-		util.Debugf("mkdir(%s) partial response: %+v", mkdirres)
+		util.Debugf("mkdir(%s) partial response: %+v", path, mkdirres)
 		return nil, err
 	}
 

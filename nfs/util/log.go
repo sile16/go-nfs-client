@@ -18,55 +18,45 @@
 package util
 
 import (
-	
-	log "github.com/sirupsen/logrus"
+	"os"
+	"testing"
+
+	"github.com/sirupsen/logrus"
 )
 
-var DefaultLogger Logger
+var DefaultLogger *logrus.Logger
+var Tlog *testing.T
 
-type Logger interface {
-	SetDebug(bool)
-	Errorf(format string, args ...interface{})
-	Debugf(format string, args ...interface{})
-	Infof(format string, args ...interface{})
-}
 
 func init() {
-	DefaultLogger = &logger{}
-}
-
-type logger struct {
-	DebugLevel bool
-}
-
-func (l *logger) SetDebug(enable bool) {
-	l.DebugLevel = enable
-}
-
-func (l *logger) Errorf(format string, args ...interface{}) {
-	log.Printf(format, args...)
-}
-
-func (l *logger) Debugf(format string, args ...interface{}) {
-	//if !l.DebugLevel {
-	//	return
-	//}
-
-	log.Printf(format, args...)
-}
-
-func (l *logger) Infof(format string, args ...interface{}) {
-	log.Printf(format, args...)
+	DefaultLogger = &logrus.Logger{
+		Out: os.Stderr,
+		Formatter: new(logrus.TextFormatter),
+		Hooks: make(logrus.LevelHooks),
+		Level: logrus.WarnLevel,
+	  }
 }
 
 func Errorf(format string, args ...interface{}) {
-	DefaultLogger.Errorf(format, args...)
+	if Tlog != nil {
+		Tlog.Errorf(format, args...)
+	} else {
+		DefaultLogger.Errorf(format, args...)
+	}
 }
 
 func Debugf(format string, args ...interface{}) {
-	DefaultLogger.Debugf(format, args...)
+	if Tlog != nil {
+		Tlog.Logf(format, args...)
+	} else {
+		DefaultLogger.Debugf(format, args...)
+	}
 }
 
 func Infof(format string, args ...interface{}) {
-	DefaultLogger.Infof(format, args...)
+	if Tlog != nil {
+		Tlog.Logf(format, args...)
+	} else {
+		DefaultLogger.Infof(format, args...)
+	}
 }

@@ -3,6 +3,7 @@
 package nfs
 
 import (
+	"bytes"
 	"errors"
 	"io"
 	"os"
@@ -12,7 +13,6 @@ import (
 	"github.com/sile16/go-nfs-client/nfs/rpc"
 	"github.com/sile16/go-nfs-client/nfs/util"
 	"github.com/sile16/go-nfs-client/nfs/xdr"
-
 )
 
 // File wraps the NfsProc3Read and NfsProc3Write methods to implement a
@@ -21,12 +21,24 @@ type File struct {
 	*Target
 
 	// current position
-	curr   uint64
-	size   int64
-	fsinfo *FSInfo
+	curr     uint64
+	size     int64
+	fsinfo   *FSInfo
+	io_depth int
+	max_write uint32
 
 	// filehandle to the file
 	fh []byte
+}
+
+// sets the number of concurrent io operations for sync functions readfrom, & write.
+func (f *File) SetIODepth(depth int) {
+	f.io_depth = depth
+}
+
+// sets the max write size for sync functions readfrom, & write.
+func (f *File) SetMaxWriteSize(size uint32) {
+	f.max_write = size
 }
 
 // Readlink gets the target of a symlink
@@ -89,51 +101,66 @@ func (f *File) ReadFrom(r io.Reader) (int64, error) {
 		WriteVerf uint64
 	}
 
-	chunk_chan := make(chan []byte, f.Target.Client.Rpc_depth)
-	rpc_chan := make(chan *rpc.Rpc_call, f.Target.Client.Rpc_depth)
+	chunk_chan := make(chan []byte, f.io_depth)
+	rpc_sending_chan := make(chan bool, f.io_depth)
+	rpc_reply_chan := make(chan *rpc.Rpc_call, f.io_depth)
+
+	util.Debugf("ReadFrom channels created with depth %d", f.io_depth)
 	//rpc_reply := make(chan bool, 8)
 	//done_chan := make(chan bool, 1)
-	
 
 	var total_rpc_calls atomic.Int32
 	var recieved_rpc_repies atomic.Int32
 	var all_sent atomic.Bool
-	
+
 	// Read rpc replies
 	written_confirmed := uint32(0)
 	all_rpc_replies_received := sync.WaitGroup{}
 	all_rpc_replies_received.Add(1)
 
+	show_chan_depth := func() {
+		util.Debugf("chunk_chan: %d, rpc_pending: %d, unhandled replies: %d",
+			len(chunk_chan), total_rpc_calls.Load()-recieved_rpc_repies.Load(), len(rpc_reply_chan))
+	}
+
 	// get rpc replies
 	go func() {
 		defer all_rpc_replies_received.Done()
 		util.Debugf("NFS File ReadFrom: start liesting for rpc replies.")
-		
-		for rpccall := range rpc_chan {
+
+		for rpccall := range rpc_reply_chan {
 			util.Debugf("NFS File ReadFrom: RPC Reply")
 
-				writeres := &WriteRes{}
-				
-				if err := xdr.Read(rpccall.Res, writeres); err != nil {
-					util.Errorf("write(%x) failed to parse result: %s", f.fh, err.Error())
-					util.Debugf("write(%x) partial result: %+v", f.fh, writeres)
-					break
-				}
+			<-rpc_sending_chan
+			show_chan_depth()
 
-				if writeres.Count != f.fsinfo.WTPref {
-					util.Debugf("write(%x) did not write full data payload: sent: %d, written: %d", f.fsinfo.WTPref, writeres.Count)
-				}
+			// read NFS reply status
+			if _, err := f.NfsReadResponse(rpccall.Res, rpccall.Error); err != nil {
+				util.Debugf("NFS File ReadFrom: NfsReadResponse: %s", err.Error())
+			}
 
-				f.curr += uint64(writeres.Count)
-				written_confirmed += writeres.Count
+			writeres := &WriteRes{}
 
-				util.Debugf("write(%x) len=%d new_offset=%d written=%d total=%d", f.fh, f.fsinfo.WTPref, f.curr, writeres.Count, written_confirmed)
+			if err := xdr.Read(rpccall.Res, writeres); err != nil {
+				util.Errorf("write(%x) failed to parse result: %s", f.fh, err.Error())
+				util.Debugf("write(%x) partial result: %+v", f.fh, writeres)
+				break
+			}
 
-				recieved_rpc_repies.Add(1)
-				if all_sent.Load() && 
-				   recieved_rpc_repies.Load() == total_rpc_calls.Load() {
-					break
-				}
+			if writeres.Count != rpccall.Msg.Body.(*WriteArgs).Count {
+				util.Debugf("write(%x) did not write full data payload: sent: %d, written: %d", f.fh, f.fsinfo.WTPref, writeres.Count)
+			}
+
+			f.curr += uint64(writeres.Count)
+			written_confirmed += writeres.Count
+
+			util.Debugf("write(%x) len=%d new_offset=%d written=%d total=%d", f.fh, f.fsinfo.WTPref, f.curr, writeres.Count, written_confirmed)
+
+			recieved_rpc_repies.Add(1)
+			if all_sent.Load() &&
+				recieved_rpc_repies.Load() == total_rpc_calls.Load() {
+				break
+			}
 		}
 	}()
 
@@ -142,18 +169,24 @@ func (f *File) ReadFrom(r io.Reader) (int64, error) {
 	go func() {
 		defer all_sent.Store(true)
 		util.Debugf("NFS File ReadFrom: starting to send RPCs")
-		
+
+		max_write_size := f.fsinfo.WTPref
+		if f.max_write > 0 {
+			max_write_size = min(max_write_size, f.max_write)
+		}
+
 		for chunk := range chunk_chan {
 			
 			totalToWrite := uint32(len(chunk))
 			util.Debugf("NFS File ReadFrom: Sending RPC chunk: %d", totalToWrite)
-			
+
 			for written := uint32(0); written < totalToWrite; {
+				rpc_sending_chan <- true // will rate limit outstanding RPCs based on buff depth
+				show_chan_depth()
+
 				total_rpc_calls.Add(1)
-				writeSize := min(f.fsinfo.WTPref, totalToWrite-written)
-			
-				
-				
+				writeSize := min(max_write_size, totalToWrite-written)
+
 				rpccall := f.Go(&WriteArgs{
 					Header: rpc.Header{
 						Rpcvers: 2,
@@ -167,8 +200,8 @@ func (f *File) ReadFrom(r io.Reader) (int64, error) {
 					Offset:   f.curr,
 					Count:    writeSize,
 					How:      2,
-					Contents: chunk,
-				}, rpc_chan)
+					Contents: chunk[written : written+writeSize],
+				}, rpc_reply_chan)
 
 				if rpccall.Error != nil {
 					util.Errorf("write(%x): %s", f.fh, rpccall.Error.Error())
@@ -183,23 +216,30 @@ func (f *File) ReadFrom(r io.Reader) (int64, error) {
 	}()
 
 	// Read the input stream until EOF
-	go func() {	
+	go func() {
 		util.Debugf("NFS File ReadFrom: starting to read from input stream")
+		chunks_read := 0
 		for {
 			//todo: a pool of buffers again?
 			buf := make([]byte, f.fsinfo.WTPref)
 			n, err := r.Read(buf)
 			if err != nil {
 				if err == io.EOF {
+					if chunks_read == 0 {
+						util.Errorf("0 Chunks read from input stream: %s", err.Error())
+					}
 					break
 				}
-				
+				util.Errorf("NFS File ReadFrom: read error: %s", err.Error())
+
 			}
+			chunks_read++
 			util.Debugf("NFS File ReadFrom: Read %d from stream sending to channel", n)
 			chunk_chan <- buf[:n]
+			show_chan_depth()
 		}
 		close(chunk_chan)
-		
+
 	}()
 
 	all_rpc_replies_received.Wait()
@@ -207,7 +247,7 @@ func (f *File) ReadFrom(r io.Reader) (int64, error) {
 	return int64(written_confirmed), nil
 }
 
-//Since we don't know the size of the file, we need to read it in chunks so we don't block
+// Since we don't know the size of the file, we need to read it in chunks so we don't block
 func (f *File) Read(p []byte) (int, error) {
 	type ReadArgs struct {
 		rpc.Header
@@ -268,74 +308,9 @@ func (f *File) Read(p []byte) (int, error) {
 // Write entire buffer to file, will loop until all data is written
 // will issue multiple writes up to the depth in specified DialMount Args
 func (f *File) Write(p []byte) (int, error) {
-	type WriteArgs struct {
-		rpc.Header
-		FH     []byte
-		Offset uint64
-		Count  uint32
-
-		// UNSTABLE(0), DATA_SYNC(1), FILE_SYNC(2) default
-		How      uint32
-		Contents []byte
-	}
-
-	type WriteRes struct {
-		Wcc       WccData
-		Count     uint32
-		How       uint32
-		WriteVerf uint64
-	}
-
-	totalToWrite := uint32(len(p))
-	written := uint32(0)
-
-
-
-	for written = 0; written < totalToWrite; {
-		writeSize := min(f.fsinfo.WTPref, totalToWrite-written)
-
-		res, err := f.call(&WriteArgs{
-			Header: rpc.Header{
-				Rpcvers: 2,
-				Prog:    Nfs3Prog,
-				Vers:    Nfs3Vers,
-				Proc:    NFSProc3Write,
-				Cred:    f.auth,
-				Verf:    rpc.AuthNull,
-			},
-			FH:       f.fh,
-			Offset:   f.curr,
-			Count:    writeSize,
-			How:      2,
-			Contents: p[written : written+writeSize],
-		})
-
-		if err != nil {
-			util.Errorf("write(%x): %s", f.fh, err.Error())
-			return int(written), err
-		}
-
-		writeres := &WriteRes{}
-		if err = xdr.Read(res, writeres); err != nil {
-			util.Errorf("write(%x) failed to parse result: %s", f.fh, err.Error())
-			util.Debugf("write(%x) partial result: %+v", f.fh, writeres)
-			return int(written), err
-		}
-
-		if writeres.Count != writeSize {
-			util.Debugf("write(%x) did not write full data payload: sent: %d, written: %d", writeSize, writeres.Count)
-		}
-
-		f.curr += uint64(writeres.Count)
-		written += writeres.Count
-
-		util.Debugf("write(%x) len=%d new_offset=%d written=%d total=%d", f.fh, totalToWrite, f.curr, writeres.Count, written)
-	}
-
-	return int(written), nil
+	n, err := f.ReadFrom(bytes.NewReader(p))
+	return int(n), err
 }
-
-
 
 // Close commits the file
 func (f *File) Close() error {
@@ -407,9 +382,10 @@ func (v *Target) OpenFile(path string, perm os.FileMode) (*File, error) {
 	}
 
 	f := &File{
-		Target: v,
-		fsinfo: v.fsinfo,
-		fh:     fh,
+		Target:   v,
+		fsinfo:   v.fsinfo,
+		fh:       fh,
+		io_depth: 2, //default in linux rpc
 	}
 
 	return f, nil
@@ -438,4 +414,3 @@ func min(x, y uint32) uint32 {
 	}
 	return x
 }
-

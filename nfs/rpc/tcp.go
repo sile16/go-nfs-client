@@ -3,7 +3,6 @@
 package rpc
 
 import (
-	"bytes"
 	"encoding/binary"
 	"fmt"
 	"io"
@@ -22,7 +21,7 @@ type tcpTransport struct {
 
 // Get the response from the conn, buffer the contents, and return a reader to
 // it.
-func (t *tcpTransport) recv() (io.ReadSeeker, error) {
+func (t *tcpTransport) recv() ([]byte, error) {
 	t.rlock.Lock()
 	defer t.rlock.Unlock()
 	if t.timeout != 0 {
@@ -39,7 +38,6 @@ func (t *tcpTransport) recv() (io.ReadSeeker, error) {
 	rpc_len := hdr&0x7fffffff
 	buf := make([]byte, rpc_len) 
 	
-	
 	if int(rpc_len) > 520*1024 {
 		return nil, fmt.Errorf("RPC response larger than 520k, response: %d", rpc_len)
 	}
@@ -48,7 +46,7 @@ func (t *tcpTransport) recv() (io.ReadSeeker, error) {
 		return nil, err
 	}
 	
-	return bytes.NewReader(buf), nil
+	return buf, nil
 
 }
 

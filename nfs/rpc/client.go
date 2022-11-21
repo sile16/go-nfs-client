@@ -45,29 +45,33 @@ func init() {
 type Client struct {
 	*tcpTransport
 	reqMutex sync.Mutex
-	mutex sync.Mutex
+	mutex    sync.Mutex
 
 	Rpc_depth int // number of outstanding RPCs
 
 	// buffer pool for replies
-	replyPool *sync.Pool
-	buf []byte	// buffer to hold the response
-	pending map[uint32]*Rpc_call
-	closing bool
+	//replyPool *sync.Pool
+	buf      []byte // buffer to hold the response
+	pending  map[uint32]*Rpc_call
+	closing  bool
 	shutdown bool
+
+	input_running atomic.Bool
 }
+
+//func DialTCP(network string, ldr *net.TCPAddr, addr string) (*Client, error) {
+//	return DialTCPDepth(network, ldr, addr, 8)
+//}
 
 func DialTCP(network string, ldr *net.TCPAddr, addr string) (*Client, error) {
-	return DialTCPDepth(network, ldr, addr, 1)
-}
-
-func DialTCPDepth(network string, ldr *net.TCPAddr, addr string, rpc_depth int) (*Client, error) {
+	util.Debugf("rpc: DialTCP: %s", addr)
 	a, err := net.ResolveTCPAddr(network, addr)
 	if err != nil {
 		return nil, err
 	}
 
 	conn, err := net.DialTCP(a.Network(), ldr, a)
+	util.Debugf("net.DialTCP: %v", conn)
 	if err != nil {
 		return nil, err
 	}
@@ -78,7 +82,7 @@ func DialTCPDepth(network string, ldr *net.TCPAddr, addr string, rpc_depth int) 
 	}
 
 	// allocate buffers for replies
-	var bufPool = sync.Pool{
+	/*var bufPool = sync.Pool{
 		New: func() any {
 			// The Pool's New function should generally only return pointer
 			// types, since a pointer can be put into the return interface
@@ -86,15 +90,14 @@ func DialTCPDepth(network string, ldr *net.TCPAddr, addr string, rpc_depth int) 
 			buf := make([]byte, 520*1024) // 512K + extra for RPC headers
 			return &buf
 		},
-	}
+	}*/
 
 	client := &Client{
 		tcpTransport: t,
 		reqMutex:     sync.Mutex{},
-		Rpc_depth:    rpc_depth,
-		replyPool:    &bufPool,
-		buf:          []byte{},
-		pending:      make(map[uint32]*Rpc_call),
+		//replyPool:    &bufPool,
+		buf:     []byte{},
+		pending: make(map[uint32]*Rpc_call),
 	}
 	// start the receiver loop
 	go client.input()
@@ -103,12 +106,13 @@ func DialTCPDepth(network string, ldr *net.TCPAddr, addr string, rpc_depth int) 
 }
 
 type Rpc_call struct {
-	msg *Message
-	msg_bytes    []byte
+	Msg       *Message
+	Msg_bytes []byte
 
-	Res io.ReadSeeker
-	Done chan *Rpc_call
-	Error error
+	Res     io.ReadSeeker
+	Res_bytes []byte
+	Done    chan *Rpc_call
+	Error   error
 	retries int
 }
 
@@ -119,6 +123,7 @@ type Message struct {
 }
 
 func (call *Rpc_call) done() {
+	// call is only sent into the channel if the channel is not full
 	select {
 	case call.Done <- call:
 		// ok
@@ -132,6 +137,7 @@ func (call *Rpc_call) done() {
 // Close calls the underlying codec's Close method. If the connection is already
 // shutting down, ErrShutdown is returned.
 func (client *Client) Close() error {
+	util.Debugf("rpc: client is closing")
 	client.mutex.Lock()
 	defer client.mutex.Unlock()
 
@@ -144,6 +150,7 @@ func (client *Client) Close() error {
 }
 
 func (c *Client) send(call *Rpc_call) {
+	util.Debugf("rpc: sending call %v", call.Msg)
 
 	c.reqMutex.Lock()
 	defer c.reqMutex.Unlock()
@@ -156,15 +163,16 @@ func (c *Client) send(call *Rpc_call) {
 		call.done()
 		return
 	}
-	seq := call.msg.Xid
-	c.pending[call.msg.Xid] = call
+	seq := call.Msg.Xid
+	c.pending[call.Msg.Xid] = call
 	c.mutex.Unlock()
 
 	// Send the request.
-	_, err := c.Write(call.msg_bytes)
+	_, err := c.Write(call.Msg_bytes)
+	util.Debugf("rpc: sent call %v", call.Msg)
 	if err != nil {
 		c.mutex.Lock()
-		// Why do we have this line here? 
+		// If we error, it means the send is failed and we should't wait for the response.
 		call = c.pending[seq]
 		delete(c.pending, seq)
 		c.mutex.Unlock()
@@ -175,18 +183,33 @@ func (c *Client) send(call *Rpc_call) {
 	}
 }
 
-
 // we run this in a loop in a separate goroutine
 func (c *Client) input() {
 	var err error
-	var res io.ReadSeeker
+
+	util.Debugf("rpc: client input loop starting")
+
+	if c.input_running.Swap(true) {
+		util.Debugf("rpc: client input already running, returning")
+		return
+	}
+
+	prev_xid := uint32(0)
 
 	for err == nil {
 
-		// read next rpc call from the wire.
+		// read next rpc call from the wire, this will block when no data is available
 		call, err := c.readRPCCall()
 		if err != nil {
 			break
+		}
+
+		// check to see if server responds to RPCs out of order.
+		if call.Msg != nil {
+			if prev_xid != 0 && prev_xid != call.Msg.Xid + 1 {
+				util.Infof("rpc: client input loop detected xid out of order, prev_xid: %d, xid: %d", prev_xid, call.Msg.Xid)
+			}
+			prev_xid = call.Msg.Xid
 		}
 
 		switch {
@@ -196,19 +219,25 @@ func (c *Client) input() {
 			// removed; response is a server telling us about an
 			// error reading request body. We should still attempt
 			// to read error body, but there's no one to give it to.
-			
+			util.Debugf("rpc: client input received for unknown call.")
+
 		default:
 			// We've got an error response. Give this to the request;
 			// any subsequent requests will get the ReadResponseBody
 			// error if there is one.
+
 			call.Error = err
-			call.Res = res
+			//call.Res = res
 			call.done()
 		}
 	}
+	c.input_running.Store(true)
+	util.Debugf("rpc: input loop exiting")
 	// Terminate pending calls.
 	c.reqMutex.Lock()
+	defer c.reqMutex.Unlock()
 	c.mutex.Lock()
+	defer c.mutex.Unlock()
 	c.shutdown = true
 	closing := c.closing
 	if err == io.EOF {
@@ -222,23 +251,25 @@ func (c *Client) input() {
 		call.Error = err
 		call.done()
 	}
-	c.mutex.Unlock()
-	c.reqMutex.Unlock()
+
 	if err != io.EOF && !closing {
 		util.Debugf("rpc: client protocol error:", err)
 	}
 }
 
-func (c *Client) readRPCCall() ( *Rpc_call, error) {
+func (c *Client) readRPCCall() (*Rpc_call, error) {
 	// todo can we make a pool of buffers for this?
 	// read the entire message from the wire
 	// read from network,
-	res, err := c.tcpTransport.recv()
+	//util.Debugf("rpc: client readRPCCall reading next call")
+	res_bytes, err := c.tcpTransport.recv()
+	res := bytes.NewReader(res_bytes)
 	if err != nil {
 		return nil, err
 	}
 
 	// get the seq number
+	//	util.Debugf("rpc: client input got a response")
 	seq, err := xdr.ReadUint32(res)
 	if err != nil {
 		return nil, err
@@ -255,7 +286,8 @@ func (c *Client) readRPCCall() ( *Rpc_call, error) {
 		return nil, fmt.Errorf("rpc: received response for unknown call %d", seq)
 	}
 
-	mtype,  err := xdr.ReadUint32(res)
+	util.Debugf("rpc: client input got a response for call %d", seq)
+	mtype, err := xdr.ReadUint32(res)
 	if err != nil {
 		return call, err
 	}
@@ -293,13 +325,14 @@ func (c *Client) readRPCCall() ( *Rpc_call, error) {
 		switch acceptStatus {
 		case Success:
 			call.Res = res
+			call.Res_bytes = res_bytes[24 + opaque_len:]
 			return call, nil
 		case ProgUnavail:
-			return nil, fmt.Errorf("rpc: PROG_UNAVAIL - server does not recognize the program number")
+			return call, fmt.Errorf("rpc: PROG_UNAVAIL - server does not recognize the program number")
 		case ProgMismatch:
-			return nil, fmt.Errorf("rpc: PROG_MISMATCH - program version does not exist on the server")
+			return call, fmt.Errorf("rpc: PROG_MISMATCH - program version does not exist on the server")
 		case ProcUnavail:
-			return nil, fmt.Errorf("rpc: PROC_UNAVAIL - unrecognized procedure number")
+			return call, fmt.Errorf("rpc: PROC_UNAVAIL - unrecognized procedure number")
 		case GarbageArgs:
 			// emulate Linux behaviour for GARBAGE_ARGS
 			if call.retries == 0 {
@@ -312,11 +345,11 @@ func (c *Client) readRPCCall() ( *Rpc_call, error) {
 				return call, nil
 			}
 
-			return nil, fmt.Errorf("rpc: GARBAGE_ARGS - rpc arguments cannot be XDR decoded")
+			return call, fmt.Errorf("rpc: GARBAGE_ARGS - rpc arguments cannot be XDR decoded")
 		case SystemErr:
-			return nil, fmt.Errorf("rpc: SYSTEM_ERR - unknown error on server")
+			return call, fmt.Errorf("rpc: SYSTEM_ERR - unknown error on server")
 		default:
-			return nil, fmt.Errorf("rpc: unknown accepted status error: %d", acceptStatus)
+			return call, fmt.Errorf("rpc: unknown accepted status error: %d", acceptStatus)
 		}
 
 	case MsgDenied:
@@ -343,15 +376,17 @@ func newRPCCall(call interface{}) (*Rpc_call, error) {
 		Body: call,
 	}
 
-	// Write that msg into a buffer using XDR 
+	// Write that msg into a buffer using XDR
 	w := new(bytes.Buffer)
-	err := xdr.Write(w, msg); if err != nil {
+	err := xdr.Write(w, msg)
+	if err != nil {
 		return nil, err
 	}
 
+	//todo w.Bytes() , do we need that? 
 	return &Rpc_call{
-		msg: msg,
-		msg_bytes: w.Bytes(),
+		Msg:       msg,
+		Msg_bytes: w.Bytes(),
 	}, nil
 }
 
@@ -366,7 +401,7 @@ func (client *Client) Go(call interface{}, done chan *Rpc_call) *Rpc_call {
 	}
 
 	if done == nil {
-		done = make(chan *Rpc_call, 10) // buffered.
+		done = make(chan *Rpc_call, 1) // buffered.
 	} else {
 		// If caller passes done != nil, it must arrange that
 		// done has enough buffer for the number of simultaneous
@@ -382,6 +417,7 @@ func (client *Client) Go(call interface{}, done chan *Rpc_call) *Rpc_call {
 }
 
 func (c *Client) Call(call interface{}) (io.ReadSeeker, error) {
-	rpccall := <-c.Go(call, make(chan *Rpc_call, 1)).Done
+	rpccall_chan := c.Go(call, make(chan *Rpc_call, 1)).Done
+	rpccall := <-rpccall_chan
 	return rpccall.Res, rpccall.Error
 }

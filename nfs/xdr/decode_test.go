@@ -1,14 +1,11 @@
 // Copyright © 2017 VMware, Inc. All Rights Reserved.
 // SPDX-License-Identifier: BSD-2-Clause
-//
 package xdr
 
 import (
 	"bytes"
 	"encoding/binary"
 	"testing"
-
-	"github.com/sile16/go-nfs-client/nfs/util"
 )
 
 func TestRead(t *testing.T) {
@@ -28,7 +25,6 @@ func TestRead(t *testing.T) {
 }
 
 func TestByteSlice(t *testing.T) {
-	util.DefaultLogger.SetDebug(true)
 
 	// byte slices have a length field up front, followed by the data.  The
 	// data is aligned to 4B.
@@ -62,7 +58,7 @@ func TestByteSlice(t *testing.T) {
 		return
 	}
 
-	if bytes.Compare(in.Data, out) != 0 {
+	if !bytes.Equal(in.Data, out) {
 		t.FailNow()
 	}
 }

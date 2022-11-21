@@ -19,7 +19,7 @@ import (
 )
 
 func main() {
-	util.DefaultLogger.SetDebug(true)
+	//util.DefaultLogger.SetDebug(true)
 	if len(os.Args) != 3 {
 		util.Infof("%s <host>:<target path> <test directory to be created>", os.Args[0])
 		os.Exit(-1)

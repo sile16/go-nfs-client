@@ -220,19 +220,25 @@ type FSInfo struct {
 }
 
 func DialService(addr string, prog rpc.Mapping, priv bool) (*rpc.Client, error) {
+	util.Debugf("Port Mapper: %s", addr)
 	pm, err := rpc.DialPortmapper("tcp", addr)
 	if err != nil {
 		util.Errorf("Failed to connect to portmapper: %s", err)
 		return nil, err
 	}
-	defer pm.Close()
+	
+	defer util.Debugf("Closing Port Mapper: %s", addr)
+
 
 	port, err := pm.Getport(prog)
 	if err != nil {
 		return nil, err
 	}
+	util.Debugf("Get Port finished: %s", addr)
+
 
 	client, err := dialService(addr, port, priv)
+
 	if err != nil {
 		return nil, err
 	}

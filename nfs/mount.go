@@ -1,6 +1,5 @@
 // Copyright © 2017 VMware, Inc. All Rights Reserved.
 // SPDX-License-Identifier: BSD-2-Clause
-//
 package nfs
 
 import (
@@ -8,6 +7,7 @@ import (
 	"fmt"
 
 	"github.com/sile16/go-nfs-client/nfs/rpc"
+	"github.com/sile16/go-nfs-client/nfs/util"
 	"github.com/sile16/go-nfs-client/nfs/xdr"
 )
 
@@ -137,6 +137,7 @@ func DialMount(addr string, priv bool) (*Mount, error) {
 		Port: 0,
 	}
 
+	util.Debugf("DialMount: %s", addr)
 	client, err := DialService(addr, m, priv)
 	if err != nil {
 		return nil, err
