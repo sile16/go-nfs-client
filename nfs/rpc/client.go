@@ -184,6 +184,7 @@ func (c *Client) send(call *Rpc_call) {
 }
 
 // we run this in a loop in a separate goroutine
+// Input loops onh readRPCCall and then calls done() on each one which puts it into the reply chan.
 func (c *Client) input() {
 	var err error
 
@@ -231,7 +232,7 @@ func (c *Client) input() {
 			call.done()
 		}
 	}
-	c.input_running.Store(true)
+
 	util.Debugf("rpc: input loop exiting")
 	// Terminate pending calls.
 	c.reqMutex.Lock()

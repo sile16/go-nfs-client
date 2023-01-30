@@ -11,7 +11,6 @@ import (
 	"testing"
 
 	"github.com/sile16/go-nfs-client/nfs/rpc"
-	//metrics "github.com/tevjef/go-runtime-metrics"
 )
 
 func listenAndServe(t *testing.T, port int) (*net.TCPListener, *sync.WaitGroup, error) {
