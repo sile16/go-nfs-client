@@ -250,8 +250,8 @@ func testFileRW(v *nfs.Target, name string, filesize uint64) error {
 		util.Errorf("read error: %v", err)
 		return err
 	}
-	rdr.SetMaxReadSize(512*1024)
-	rdr.SetIODepth(1)
+	rdr.SetMaxReadSize(3*1024*1024)
+	rdr.SetIODepth(4)
 
 	h = sha256.New()
 	rdr.WriteTo(h)

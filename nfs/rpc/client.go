@@ -118,6 +118,8 @@ type Rpc_call struct {
 	DoneChan  chan *Rpc_call
 	Error     error
 	retries   int
+	ReturnedData	[]byte
+	ReturnedMsg interface{}
 }
 
 type Message struct {

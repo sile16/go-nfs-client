@@ -27,7 +27,7 @@ type ReadRes struct {
 }
 
 //make a sync pool of channels of type *rpc.Rpc_call
-var read_done_pool = sync.Pool{
+var rpc_reply_chan_pool = sync.Pool{
 	New: func() interface{} {
 		return make(chan *rpc.Rpc_call, 1)
 	},
@@ -45,8 +45,9 @@ func (f *File) process_read_response(rpccall *rpc.Rpc_call, p []byte) (*ReadRes,
 	}
 
 	readres := &ReadRes{}
-
+	
 	rpccall.Error = xdr.Read(rpccall.Res, readres)
+	rpccall.ReturnedMsg = readres
 
 	if rpccall.Error != nil {
 		return readres, rpccall.Error
@@ -54,7 +55,14 @@ func (f *File) process_read_response(rpccall *rpc.Rpc_call, p []byte) (*ReadRes,
 
 	var n int
 
-	n, rpccall.Error = rpccall.Res.Read(p[:readres.Data.Length])
+	if p != nil {
+		rpccall.ReturnedData = p
+	} else {
+		rpccall.ReturnedData = make([]byte, readres.Data.Length)
+	}
+
+	n, rpccall.Error = rpccall.Res.Read(rpccall.ReturnedData[:readres.Data.Length])
+
 	if n != int(readres.Data.Length) {
 		rpccall.Error = io.ErrShortBuffer
 	}
@@ -131,23 +139,97 @@ func (f *File) WriteTo(w io.Writer) (n int64, err error) {
 	go func() {
 		defer wg.Done()
 		defer close(data_chan)
+
+		//make a list of rpc calls needed to buffer for missing read data
+		
+		waiting_for_missing_data := make([]*rpc.Rpc_call, 0, f.io_depth)
+		next_offset := 0
+		eof := false
+		largest_response := uint32(0)
+		too_small_response_count := uint32(0)
+
 		for {
-			// buffer to use for the read
+			
 			select {
 			case <-done_chan:
 				return
 			case rpc_res := <-rpc_reply_chan:
-				<- max_outstanding_rpc_chan	
-				p := make([]byte, f.max_read_size)
-				readres, err := f.process_read_response(rpc_res, p)
-
-				data_chan <- p[:readres.Data.Length]	
-
+				
+				
+				readres, err := f.process_read_response(rpc_res, nil)
 				if err != nil {
-					write_to_error = err
-					return
+					if err == io.EOF {
+						eof = true
+					} else {
+						write_to_error = err
+						return
+					}
+				}
+					
+
+				
+				if readres.Data.Length > largest_response {
+					largest_response = readres.Data.Length
+				}
+
+				// if we have missing data, we need send a request for the missing data
+				// and buffer the response
+				if rpc_res.Msg.Body.(*ReadArgs).Count != readres.Data.Length {
+					read_size := rpc_res.Msg.Body.(*ReadArgs).Count - readres.Data.Length
+					offset := rpc_res.Msg.Body.(*ReadArgs).Offset + uint64(readres.Data.Length)
+					f.send_read_rpc(read_size, int(offset), rpc_reply_chan)
+					too_small_response_count++
+
+					if too_small_response_count > 4 {
+						util.Debugf("too many small responses, reducing request to size: %d", largest_response)
+						f.SetMaxReadSize(largest_response)
+						too_small_response_count = 0
+						largest_response = 0
+					}
+				}
+
+				// insert message into our queue
+				inserted := false
+				for i, rpc_tmp := range waiting_for_missing_data {
+					if rpc_tmp == nil {
+						waiting_for_missing_data[i] = rpc_res
+						inserted=true
+						break
+					}
+				}
+				if !inserted {
+					waiting_for_missing_data = append(waiting_for_missing_data, rpc_res)
 				}
 				
+				// search queue to see if we have the next bytes in the stream
+				all_nil := true
+				for found := true; found; {
+					found = false
+					all_nil = true
+					for i, rpc_tmp := range waiting_for_missing_data {
+						if rpc_tmp != nil {
+							all_nil = false
+							offset := rpc_tmp.Msg.Body.(*ReadArgs).Offset
+							if offset == uint64(next_offset) {
+								found = true
+								len := rpc_tmp.ReturnedMsg.(*ReadRes).Data.Length
+								p := rpc_tmp.ReturnedData
+								// we have the missing data, so we can write it out
+								<- max_outstanding_rpc_chan	
+								data_chan <- p[:len]
+								next_offset += int(len)
+								
+								// remove the rpc_res from the waiting list
+								waiting_for_missing_data[i] = nil
+							} else if offset < uint64(next_offset) {
+								util.Debugf("unexpected offset %d, expected %d", offset, next_offset)
+							}
+						}
+					}
+				}
+				if eof && all_nil {
+					return
+				}
 			}
 		}
 		
@@ -184,18 +266,19 @@ func (f *File) Read(p []byte) (int, error) {
 
 	//create a channel sync.pool of type chan *Rpc.rpc_call for rpc_replies
 	
-	rpc_reply_chan := read_done_pool.Get().(chan *rpc.Rpc_call)
-	defer read_done_pool.Put(rpc_reply_chan)
+	rpc_reply_chan := rpc_reply_chan_pool.Get().(chan *rpc.Rpc_call)
+	defer rpc_reply_chan_pool.Put(rpc_reply_chan)
 
 	var mux sync.Mutex
 	mux.Lock()
 	rpc_call := f.send_read_rpc(uint32(len(p)), int(f.curr), rpc_reply_chan)
-	mux.Unlock()
+	//mux.Unlock()
 	
 	rpc_res := <- rpc_reply_chan
 
-	mux.Lock()
+	//mux.Lock()
 	read_res, err := f.process_read_response(rpc_res, p)
+
 	f.curr += uint64(read_res.Count)
 	mux.Unlock()
 	//print the current offset and length of the read

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"sync/atomic"
 
 	"github.com/sile16/go-nfs-client/nfs/rpc"
 	"github.com/sile16/go-nfs-client/nfs/util"
@@ -34,12 +35,13 @@ func (f *File) SetIODepth(depth int) {
 
 // sets the max write size for sync functions readfrom, & write.
 func (f *File) SetMaxWriteSize(size uint32) {
-	f.max_write_size = size
+	atomic.StoreUint32(&f.max_write_size, size)
 }
 
 // sets the max read size for sync functions readfrom, & write.
 func (f *File) SetMaxReadSize(size uint32) {
-	f.max_read_size = size
+	//lock with mutex
+	atomic.StoreUint32(&f.max_read_size, size)
 }
 
 // Readlink gets the target of a symlink
