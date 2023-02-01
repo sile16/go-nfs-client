@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/sile16/go-nfs-client/nfs/rpc"
+
 )
 
 func listenAndServe(t *testing.T, port int) (*net.TCPListener, *sync.WaitGroup, error) {
@@ -33,6 +34,15 @@ func listenAndServe(t *testing.T, port int) (*net.TCPListener, *sync.WaitGroup, 
 
 	return l, wg, nil
 }
+ 
+/*
+func panicOnErr(t *testing.T, err error, desc ...interface{}) {
+	if err == nil {
+		return
+	}
+	t.Log(desc...)
+	t.Log(err.Error())
+}*/
 
 // test we can bind without colliding
 func TestDialService(t *testing.T) {

@@ -37,6 +37,10 @@ func init() {
 	  }
 }
 
+func SetLevelDebug() {
+	DefaultLogger.Level = logrus.DebugLevel
+}
+
 func Errorf(format string, args ...interface{}) {
 	if Tlog != nil {
 		Tlog.Errorf(format, args...)

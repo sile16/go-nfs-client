@@ -13,6 +13,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/sile16/go-nfs-client/nfs/metrics"
 	"github.com/sile16/go-nfs-client/nfs/util"
 	"github.com/sile16/go-nfs-client/nfs/xdr"
 )
@@ -100,20 +101,23 @@ func DialTCP(network string, ldr *net.TCPAddr, addr string) (*Client, error) {
 		pending: make(map[uint32]*Rpc_call),
 	}
 	// start the receiver loop
+	metrics.Monitored_addrs = append(metrics.Monitored_addrs, a)
 	go client.input()
 
 	return client, nil
 }
 
 type Rpc_call struct {
-	Msg       *Message
-	Msg_bytes []byte
+	Msg           *Message
+	Msg_bytes     []byte
+	send_time     time.Time
+	response_time time.Time
 
-	Res     io.ReadSeeker
+	Res       io.ReadSeeker
 	Res_bytes []byte
-	Done    chan *Rpc_call
-	Error   error
-	retries int
+	DoneChan  chan *Rpc_call
+	Error     error
+	retries   int
 }
 
 type Message struct {
@@ -125,7 +129,7 @@ type Message struct {
 func (call *Rpc_call) done() {
 	// call is only sent into the channel if the channel is not full
 	select {
-	case call.Done <- call:
+	case call.DoneChan <- call:
 		// ok
 	default:
 		// We don't want to block here. It is the caller's responsibility to make
@@ -145,6 +149,9 @@ func (client *Client) Close() error {
 
 		return fmt.Errorf("rpc: client is shutting down")
 	}
+
+	client.tcpTransport.Close()
+
 	client.closing = true
 	return nil
 }
@@ -169,6 +176,10 @@ func (c *Client) send(call *Rpc_call) {
 
 	// Send the request.
 	_, err := c.Write(call.Msg_bytes)
+	metrics.RpcOutstandingRequests.Inc()
+	metrics.RpcRequestsCounter.Inc()
+
+	call.send_time = time.Now()
 	util.Debugf("rpc: sent call %v", call.Msg)
 	if err != nil {
 		c.mutex.Lock()
@@ -201,13 +212,24 @@ func (c *Client) input() {
 
 		// read next rpc call from the wire, this will block when no data is available
 		call, err := c.readRPCCall()
+		if call != nil {
+			call.response_time = time.Now()
+			metrics.RpcRequestLatencyuS.Observe(float64(call.response_time.Sub(call.send_time).Microseconds()))
+		}
+
+		if call == nil {
+			util.Debugf("rpc: client input loop got nil call")
+		}
+
+		metrics.RpcOutstandingRequests.Dec()
+
 		if err != nil {
 			break
 		}
 
 		// check to see if server responds to RPCs out of order.
 		if call.Msg != nil {
-			if prev_xid != 0 && prev_xid != call.Msg.Xid + 1 {
+			if prev_xid != 0 && prev_xid+1 != call.Msg.Xid {
 				util.Infof("rpc: client input loop detected xid out of order, prev_xid: %d, xid: %d", prev_xid, call.Msg.Xid)
 			}
 			prev_xid = call.Msg.Xid
@@ -282,11 +304,6 @@ func (c *Client) readRPCCall() (*Rpc_call, error) {
 	delete(c.pending, seq)
 	c.mutex.Unlock()
 
-	if call == nil {
-		// received a response for a call we don't know about
-		return nil, fmt.Errorf("rpc: received response for unknown call %d", seq)
-	}
-
 	util.Debugf("rpc: client input got a response for call %d", seq)
 	mtype, err := xdr.ReadUint32(res)
 	if err != nil {
@@ -326,7 +343,7 @@ func (c *Client) readRPCCall() (*Rpc_call, error) {
 		switch acceptStatus {
 		case Success:
 			call.Res = res
-			call.Res_bytes = res_bytes[24 + opaque_len:]
+			call.Res_bytes = res_bytes[24+opaque_len:]
 			return call, nil
 		case ProgUnavail:
 			return call, fmt.Errorf("rpc: PROG_UNAVAIL - server does not recognize the program number")
@@ -384,7 +401,7 @@ func newRPCCall(call interface{}) (*Rpc_call, error) {
 		return nil, err
 	}
 
-	//todo w.Bytes() , do we need that? 
+	//todo w.Bytes() , do we need that?
 	return &Rpc_call{
 		Msg:       msg,
 		Msg_bytes: w.Bytes(),
@@ -412,13 +429,13 @@ func (client *Client) Go(call interface{}, done chan *Rpc_call) *Rpc_call {
 			panic("rpc: done channel is unbuffered")
 		}
 	}
-	rpccall.Done = done
+	rpccall.DoneChan = done
 	client.send(rpccall)
 	return rpccall
 }
 
 func (c *Client) Call(call interface{}) (io.ReadSeeker, error) {
-	rpccall_chan := c.Go(call, make(chan *Rpc_call, 1)).Done
+	rpccall_chan := c.Go(call, make(chan *Rpc_call, 1)).DoneChan
 	rpccall := <-rpccall_chan
 	return rpccall.Res, rpccall.Error
 }

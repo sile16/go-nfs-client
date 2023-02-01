@@ -10,7 +10,7 @@
             "request": "launch",
             "mode": "auto",
             "program": "nfs/example/test/main.go",
-            "args": ["127.0.0.1:/Volumes/RAMDisk", "nfs_test_fold2"]
+            "args": ["192.168.20.20:/data", "nfs_test"]
         }
 
     ]

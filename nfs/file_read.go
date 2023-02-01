@@ -1,7 +1,6 @@
 package nfs
 
 import (
-	"bytes"
 	"io"
 	"sync"
 
@@ -26,6 +25,14 @@ type ReadRes struct {
 		Length uint32
 	}
 }
+
+//make a sync pool of channels of type *rpc.Rpc_call
+var read_done_pool = sync.Pool{
+	New: func() interface{} {
+		return make(chan *rpc.Rpc_call, 1)
+	},
+}
+
 
 // proces read response from rpc call
 func (f *File) process_read_response(rpccall *rpc.Rpc_call, p []byte) (*ReadRes, error) {
@@ -130,17 +137,17 @@ func (f *File) WriteTo(w io.Writer) (n int64, err error) {
 			case <-done_chan:
 				return
 			case rpc_res := <-rpc_reply_chan:
-
+				<- max_outstanding_rpc_chan	
 				p := make([]byte, f.max_read_size)
 				readres, err := f.process_read_response(rpc_res, p)
 
-				data_chan <- p[:readres.Count]	
+				data_chan <- p[:readres.Data.Length]	
 
 				if err != nil {
 					write_to_error = err
 					return
 				}
-				<- max_outstanding_rpc_chan	
+				
 			}
 		}
 		
@@ -150,15 +157,17 @@ func (f *File) WriteTo(w io.Writer) (n int64, err error) {
 	go func() {
 		defer wg.Done()
 		defer close(max_outstanding_rpc_chan)
+		
 		for {
 			// send the read rpc
 			//size := min(f.max_read_size, uint32(f.size)-uint32(f.curr))
+			max_outstanding_rpc_chan <- 1  // this will rate limit the outstanding rpcs
 			
 			f.send_read_rpc(f.max_read_size, int(f.curr), rpc_reply_chan)
-			max_outstanding_rpc_chan <- 1  // this will rate limit the outstanding rpcs
-			f.curr = f.curr + uint64(f.max_read_size)
+			
+			f.curr += uint64(f.max_read_size)
 
-			if f.curr >= uint64(f.max_read_size) {
+			if f.curr >= uint64(f.size) {
 				break
 			}
 		}
@@ -173,39 +182,29 @@ func (f *File) WriteTo(w io.Writer) (n int64, err error) {
 // Since we don't know the size of the file, we need to read it in chunks so we don't block
 func (f *File) Read(p []byte) (int, error) {
 
-	//todo: have to read until end of file or size of p
-	//read_response_chan := make(chan *rpc.Rpc_call, 4)
+	//create a channel sync.pool of type chan *Rpc.rpc_call for rpc_replies
+	
+	rpc_reply_chan := read_done_pool.Get().(chan *rpc.Rpc_call)
+	defer read_done_pool.Put(rpc_reply_chan)
 
-	//rpccall_chan := f.ReadAsync(p, int(f.curr), read_response_chan).DoneChan
-	//rpccall := <-rpccall_chan
-	//return len(rpccall.Res_bytes), rpccall.Error
 	var mux sync.Mutex
 	mux.Lock()
-	buffer := bytes.NewBuffer(p)
-	buffer.Reset()
-	n, err := f.WriteTo(buffer)
+	rpc_call := f.send_read_rpc(uint32(len(p)), int(f.curr), rpc_reply_chan)
 	mux.Unlock()
 	
+	rpc_res := <- rpc_reply_chan
 
-	return int(n), err
+	mux.Lock()
+	read_res, err := f.process_read_response(rpc_res, p)
+	f.curr += uint64(read_res.Count)
+	mux.Unlock()
+	//print the current offset and length of the read
+	util.Debugf("read req_offset=%11d, req_len=%11d returned_len=%11d EOF=%2d", 
+					rpc_call.Msg.Body.(*ReadArgs).Offset, 
+					rpc_call.Msg.Body.(*ReadArgs).Count,
+					read_res.Data.Length,
+					read_res.EOF)
+
+	return int(read_res.Count), err
 }
 
-
-
-// Async read from file
-// Does not affect file curr position
-func (f *File) ReadAsync(p []byte, offset int, read_done chan *rpc.Rpc_call) *rpc.Rpc_call {
-
-	readSize := min(f.fsinfo.RTPref, uint32(len(p)))
-	util.Debugf("read(%x) len=%d offset=%d", f.fh, readSize, f.curr)
-
-	// start the go routine to read the response and process it from an rpc call to a read repsonse
-	// worried about how much overhead this is going to add to the read for a new goroutine on each 512KB
-	go func() {
-		rpc_res := <-read_done
-		f.process_read_response(rpc_res, p)
-		read_done <- rpc_res
-	}()
-
-	return f.send_read_rpc(readSize, offset, read_done)
-}

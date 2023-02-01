@@ -4,7 +4,6 @@ package rpc
 
 import (
 	"encoding/binary"
-	"fmt"
 	"io"
 	"net"
 	"sync"
@@ -38,9 +37,9 @@ func (t *tcpTransport) recv() ([]byte, error) {
 	rpc_len := hdr&0x7fffffff
 	buf := make([]byte, rpc_len) 
 	
-	if int(rpc_len) > 520*1024 {
-		return nil, fmt.Errorf("RPC response larger than 520k, response: %d", rpc_len)
-	}
+	//if int(rpc_len) > 520*1024 {
+	//	return nil, fmt.Errorf("RPC response larger than 520k, response: %d", rpc_len)
+	//}
 
 	if _, err := io.ReadFull(t.r, buf); err != nil {
 		return nil, err

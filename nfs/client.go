@@ -12,7 +12,7 @@ import (
 //NFS Client structure
 type Client struct {
 	// RPC client
-	rpcClient *rpc.Client
+	//rpcClient *rpc.Client
 	nfsMount *Mount
 	authUnix *rpc.AuthUnix
 	target *Target

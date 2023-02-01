@@ -1,6 +1,5 @@
 // Copyright © 2017 VMware, Inc. All Rights Reserved.
 // SPDX-License-Identifier: BSD-2-Clause
-//
 package main
 
 import (
@@ -8,20 +7,24 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"log"
 	"os"
 	"strings"
 
 	"github.com/sile16/go-nfs-client/nfs"
+	"github.com/sile16/go-nfs-client/nfs/metrics"
 	"github.com/sile16/go-nfs-client/nfs/rpc"
 	"github.com/sile16/go-nfs-client/nfs/util"
 )
 
 func main() {
-	//util.DefaultLogger.SetDebug(true)
+	util.SetLevelDebug()
+	metrics.Metrics_init()
+	defer metrics.Metrics_push()
+
+
 	if len(os.Args) != 3 {
-		util.Infof("%s <host>:<target path> <test directory to be created>", os.Args[0])
+		util.Errorf("%s <host>:<target path> <test directory to be created>", os.Args[0])
 		os.Exit(-1)
 	}
 
@@ -54,8 +57,9 @@ func main() {
 	}
 	baseDirCount := len(dirs)
 
+	
 	if _, err = v.Mkdir(dir, 0775); err != nil {
-		log.Fatalf("mkdir error: %v", err)
+		log.Fatalf("mkdir error: %v", err)	
 	}
 
 	if _, err = v.Mkdir(dir, 0775); err == nil {
@@ -82,16 +86,18 @@ func main() {
 		log.Fatalf("expected %d dirs, got %d", 1+baseDirCount, len(dirs))
 	}
 
-	// 10 MB file
-	if err = testFileRW(v, "10mb", 10*1024*1024); err != nil {
-		log.Fatalf("fail")
-	}
-
 	// 7b file
 	if err = testFileRW(v, "7b", 7); err != nil {
 		log.Fatalf("fail")
 	}
 
+
+	// 10 MB file
+	if err = testFileRW(v, "10mb", 10*1024*1024); err != nil {
+		log.Fatalf("fail")
+	}
+
+	
 	// should return an error
 	if err = v.RemoveAll("7b"); err == nil {
 		log.Fatalf("expected a NOTADIR error")
@@ -164,10 +170,19 @@ func testFileRW(v *nfs.Target, name string, filesize uint64) error {
 		util.Errorf("write fail: %s", err.Error())
 		return err
 	}
+	wr.SetMaxWriteSize(512*1024)
+
+	//make a buffer and read urandom into it
+	buf := make([]byte, filesize)
+	f.Read(buf)
+	f.Close()
+
+	//new buffer readder from the buffer
+	r := bytes.NewReader(buf)
 
 	// calculate the sha
 	h := sha256.New()
-	t := io.TeeReader(f, h)
+	t := io.TeeReader(r, h)
 
 	// Copy filesize
 	n, err := io.CopyN(wr, t, int64(filesize))
@@ -193,18 +208,58 @@ func testFileRW(v *nfs.Target, name string, filesize uint64) error {
 	h = sha256.New()
 	t = io.TeeReader(rdr, h)
 
-	_, err = ioutil.ReadAll(t)
+	// create new buffer to read into from the file
+	buf_read := make([]byte, filesize)
+	//create writer to write to the buffer
+	w := bytes.NewBuffer(buf_read)
+	w.Reset()
+	t2 := io.TeeReader(t, w)
+
+	a, err := io.ReadAll(t2)
+	if len(a) != int(filesize) {
+		util.Errorf("readall error: %v", err)
+	}
+	
 	if err != nil {
 		util.Errorf("readall error: %v", err)
 		return err
 	}
 	actualSum := h.Sum(nil)
 
-	if bytes.Compare(actualSum, expectedSum) != 0 {
-		log.Fatalf("sums didn't match. actual=%x expected=%s", actualSum, expectedSum) //  Got=0%x expected=0%x", string(buf), testdata)
+	err = rdr.Close()
+	if err != nil {
+		util.Errorf("closing rdr error: %v", err)
+		return err
+	}
+	
+
+	if !bytes.Equal(buf, buf_read) {
+		log.Fatalf("read data didn't match.") 
+	}
+
+	if !bytes.Equal(actualSum, expectedSum) {
+		log.Fatalf("ReadAll sums didn't match. actual=%x expected=%x", actualSum, expectedSum) //  Got=0%x expected=0%x", string(buf), testdata)
 	}
 
 	log.Printf("Sums match %x %x", actualSum, expectedSum)
+
+	//check the WriteAt function
+	// get the file we wrote and calc the sum
+	rdr, err = v.Open(name)
+	if err != nil {
+		util.Errorf("read error: %v", err)
+		return err
+	}
+	rdr.SetMaxReadSize(512*1024)
+	rdr.SetIODepth(1)
+
+	h = sha256.New()
+	rdr.WriteTo(h)
+	actualSum = h.Sum(nil)
+	if !bytes.Equal(actualSum, expectedSum) {
+		log.Fatalf("WriteTo sums didn't match. actual=%x expected=%x", actualSum, expectedSum) //  Got=0%x expected=0%x", string(buf), testdata)
+	}
+
 	return nil
 }
 
