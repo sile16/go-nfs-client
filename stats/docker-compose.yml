@@ -1,32 +1,46 @@
 version: '3'
+
+networks:
+  monitoring:
+    driver: bridge
+
 services:
   prometheus:
     image: prom/prometheus:v2.26.0
     volumes:
       - ./prometheus.yml:/etc/prometheus/prometheus.yml
     ports:
-      - "9090:9090"
+      - 9090:9090
+    expose:
+      - 9090
     networks:
       - monitoring
   pushgateway:
     image: prom/pushgateway
     ports:
-      - "9091:9091"
+      - 9091:9091
+    expose:
+      - 9091
     networks:
       - monitoring
   grafana:
-    image: grafana/grafana:7.4.1
+    image: grafana/grafana-oss:9.3.6
+    environment:
+      #GF_PATHS_PROVISIONING: "/etc/grafana/provisioning"
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
     volumes:
       - ./grafana.ini:/etc/grafana/grafana.ini
       - grafana-storage:/var/lib/grafana
-      - ./provisioning:/etc/grafana/provisioning
+      - ./grafana_provisioning:/etc/grafana/provisioning
+      #- ./grafana_dashboards:/var/lib/grafana/dashboards
     ports:
-      - "3000:3000"
+      - 3000:3000
+    expose:
+      - 3000
     networks:
       - monitoring
 
 volumes:
   grafana-storage:
 
-networks:
-  monitoring:
+# Run "docker-compose down --volumes" to remove all volumes

@@ -19,8 +19,7 @@ import (
 
 func main() {
 	util.SetLevelDebug()
-	metrics.Metrics_init()
-	defer metrics.Metrics_push()
+	metrics.Metrics_init("go-nfs-client-main-test", 100 )
 
 
 	if len(os.Args) != 3 {
@@ -250,8 +249,8 @@ func testFileRW(v *nfs.Target, name string, filesize uint64) error {
 		util.Errorf("read error: %v", err)
 		return err
 	}
-	rdr.SetMaxReadSize(3*1024*1024)
-	rdr.SetIODepth(4)
+	rdr.SetMaxReadSize(256)
+	rdr.SetIODepth(8)
 
 	h = sha256.New()
 	rdr.WriteTo(h)

@@ -39,7 +39,7 @@ var (
 		Name:    "rpc_latency_us",
 		Help:    "Histogram of rpc latency in us", // Sorry, we can't measure how badly it smells.
 		//Buckets: prometheus.LinearBuckets(500, 5, 5),  // 5 buckets, each 5 centigrade wide.
-        Buckets: prometheus.ExponentialBuckets(250, 2, 8),  // 10 buckets, each 2x wider.
+        Buckets: prometheus.ExponentialBuckets(500, 2, 6),  // 10 buckets, each 2x wider.
 	})
     TcpSendQueue = prometheus.NewGaugeVec(prometheus.GaugeOpts{
         Name: "tcp_send_queue",
@@ -51,16 +51,17 @@ var (
         Help: "The total number of outstanding rpc requests",
     }, []string{"remote_addr", "remote_port"})
 
-
-
 	metrics_pusher *push.Pusher
+
+    
 
     //a thread safe list []*net.TCPaddr] to be monitored
     Monitored_addrs = make([]*net.TCPAddr ,0)
 
 )
 
-func Metrics_init() {
+func Metrics_init(job_name string, push_interval int) {
+    
     prometheus.MustRegister(RpcRequestsCounter)
     prometheus.MustRegister(RpcWriteRequestsCounter)
     prometheus.MustRegister(RpcReadRequestsCounter)
@@ -71,9 +72,7 @@ func Metrics_init() {
     prometheus.MustRegister(RpcBytesReadCounter)
     prometheus.MustRegister(RpcBytesWrittenCounter)
 
-
-
-    metrics_pusher = push.New("http://127.0.0.1:9091", "my_job")
+    metrics_pusher = push.New("http://127.0.0.1:9091", job_name)
     metrics_pusher.Collector(RpcRequestsCounter)
     metrics_pusher.Collector(RpcWriteRequestsCounter)
     metrics_pusher.Collector(RpcReadRequestsCounter)
@@ -83,14 +82,23 @@ func Metrics_init() {
     metrics_pusher.Collector(TcpRecvQueue)
     metrics_pusher.Collector(RpcBytesReadCounter)
     metrics_pusher.Collector(RpcBytesWrittenCounter)
+
+    RpcOutstandingRequests.Set(0)
+
+
     
-
-    go metrics_collect_loop(1)
-
+    go metrics_collect_loop(push_interval)
+    go Metrics_push(push_interval)
 }
 
-func Metrics_push() {
-	metrics_pusher.Push()
+func Metrics_push(push_interval int) {
+    //defer RpcOutstandingRequests.Set(0)
+    // one last push to capture ending metrics.
+    defer metrics_pusher.Push()
+    for{
+        metrics_pusher.Push()
+        time.Sleep(time.Duration(push_interval) * time.Millisecond)
+    }
 }
 
 //loop forever, pushing metrics to prometheus defined by interval
@@ -110,7 +118,7 @@ func metrics_collect_loop(interval int) {
             }
         }
         
-        time.Sleep(time.Duration(interval) * time.Second)
+        time.Sleep(time.Duration(interval) * time.Millisecond)
 
     }
 }   

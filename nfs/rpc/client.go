@@ -217,13 +217,12 @@ func (c *Client) input() {
 		if call != nil {
 			call.response_time = time.Now()
 			metrics.RpcRequestLatencyuS.Observe(float64(call.response_time.Sub(call.send_time).Microseconds()))
+			metrics.RpcOutstandingRequests.Dec()
 		}
 
 		if call == nil {
 			util.Debugf("rpc: client input loop got nil call")
 		}
-
-		metrics.RpcOutstandingRequests.Dec()
 
 		if err != nil {
 			break
