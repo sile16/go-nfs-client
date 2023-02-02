@@ -8,6 +8,7 @@ import (
 	"net"
 	"sync"
 	"time"
+	"github.com/sile16/go-nfs-client/nfs/metrics"
 )
 
 type tcpTransport struct {
@@ -40,6 +41,7 @@ func (t *tcpTransport) recv() ([]byte, error) {
 	//if int(rpc_len) > 520*1024 {
 	//	return nil, fmt.Errorf("RPC response larger than 520k, response: %d", rpc_len)
 	//}
+	metrics.MG["RpcOutstandingRequests"].Dec()
 
 	if _, err := io.ReadFull(t.r, buf); err != nil {
 		return nil, err

@@ -92,7 +92,7 @@ func main() {
 
 
 	// 10 MB file
-	if err = testFileRW(v, "10mb", 10*1024*1024); err != nil {
+	if err = testFileRW(v, "10mb", 1000*1024*1024); err != nil {
 		log.Fatalf("fail")
 	}
 
@@ -172,12 +172,14 @@ func testFileRW(v *nfs.Target, name string, filesize uint64) error {
 	wr.SetMaxWriteSize(512*1024)
 
 	//make a buffer and read urandom into it
-	buf := make([]byte, filesize)
-	f.Read(buf)
-	f.Close()
+	//buf := make([]byte, filesize)
+	//f.Read(buf)
 
-	//new buffer readder from the buffer
-	r := bytes.NewReader(buf)
+	//f.Close()
+
+	//new buffer readder from the file
+
+	r := io.LimitReader(f, int64(filesize))
 
 	// calculate the sha
 	h := sha256.New()
@@ -232,9 +234,9 @@ func testFileRW(v *nfs.Target, name string, filesize uint64) error {
 	}
 	
 
-	if !bytes.Equal(buf, buf_read) {
+	/*if !bytes.Equal(buf, buf_read) {
 		log.Fatalf("read data didn't match.") 
-	}
+	}*/
 
 	if !bytes.Equal(actualSum, expectedSum) {
 		log.Fatalf("ReadAll sums didn't match. actual=%x expected=%x", actualSum, expectedSum) //  Got=0%x expected=0%x", string(buf), testdata)
@@ -249,8 +251,8 @@ func testFileRW(v *nfs.Target, name string, filesize uint64) error {
 		util.Errorf("read error: %v", err)
 		return err
 	}
-	rdr.SetMaxReadSize(256)
-	rdr.SetIODepth(8)
+	rdr.SetMaxReadSize(64*1024)
+	rdr.SetIODepth(4)
 
 	h = sha256.New()
 	rdr.WriteTo(h)
@@ -258,6 +260,15 @@ func testFileRW(v *nfs.Target, name string, filesize uint64) error {
 	if !bytes.Equal(actualSum, expectedSum) {
 		log.Fatalf("WriteTo sums didn't match. actual=%x expected=%x", actualSum, expectedSum) //  Got=0%x expected=0%x", string(buf), testdata)
 	}
+
+	rdr, err = v.Open(name)
+	if err != nil {
+		util.Errorf("read error: %v", err)
+		return err
+	}
+	rdr.SetMaxReadSize(512*1024)
+	rdr.SetIODepth(2)
+	rdr.WriteTo(h)
 
 	return nil
 }

@@ -60,6 +60,7 @@ func (f *File) process_read_response(rpccall *rpc.Rpc_call, p []byte) (*ReadRes,
 	} else {
 		rpccall.ReturnedData = make([]byte, readres.Data.Length)
 	}
+	
 
 	n, rpccall.Error = rpccall.Res.Read(rpccall.ReturnedData[:readres.Data.Length])
 
@@ -71,13 +72,16 @@ func (f *File) process_read_response(rpccall *rpc.Rpc_call, p []byte) (*ReadRes,
 		rpccall.Error = io.EOF
 	}
 
+	metrics.MC["RpcBytesReadCounter"].Add(float64(readres.Data.Length))
+	metrics.MH["RpcIOSizeReceive"].Observe(float64(readres.Data.Length))
 	return readres, rpccall.Error
 }
 
 // send read rpc call, params offset, count and read_done channel
 func (f *File) send_read_rpc(count uint32, offset int, read_done chan *rpc.Rpc_call) *rpc.Rpc_call {
-	metrics.RpcReadRequestsCounter.Inc()
-	metrics.RpcBytesReadCounter.Add(float64(count))
+	metrics.MC["RpcReadRequestsCounter"].Inc()
+	metrics.MH["RpcIOSizeRequest"].Observe(float64(count))
+	
 
 	return f.Go(&ReadArgs{
 		Header: rpc.Header{

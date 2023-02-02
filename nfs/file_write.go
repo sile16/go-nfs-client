@@ -33,8 +33,9 @@ type WriteRes struct {
 
 // send write rpc call, params offset, count and read_done channel
 func (f *File) send_write_rpc(buf []byte, offset int, write_done_chan chan *rpc.Rpc_call) *rpc.Rpc_call {
-	metrics.RpcWriteRequestsCounter.Inc()
-	metrics.RpcBytesWrittenCounter.Add(float64(len(buf)))
+	metrics.MC["RpcWriteRequestsCounter"].Inc()
+	metrics.MH["RpcIOSizeRequest"].Observe(float64(len(buf)))
+	
 
 	rpccall := f.Go(&WriteArgs{
 		Header: rpc.Header{
@@ -75,6 +76,8 @@ func (f *File) process_write_response(rpccall *rpc.Rpc_call) *WriteRes {
 	if writeres.Count != rpccall.Msg.Body.(*WriteArgs).Count {
 		util.Debugf("write(%x) did not write full data payload: sent: %d, written: %d", f.fh, f.fsinfo.WTPref, writeres.Count)
 	}
+	metrics.MC["RpcBytesWrittenCounter"].Add(float64(writeres.Count))
+	metrics.MH["RpcIOSizeReceive"].Observe(float64(writeres.Count))
 
 	return writeres
 

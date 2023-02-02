@@ -178,8 +178,8 @@ func (c *Client) send(call *Rpc_call) {
 
 	// Send the request.
 	_, err := c.Write(call.Msg_bytes)
-	metrics.RpcOutstandingRequests.Inc()
-	metrics.RpcRequestsCounter.Inc()
+	metrics.MG["RpcOutstandingRequests"].Inc()
+	metrics.MC["RpcRequestsCounter"].Inc()
 
 	call.send_time = time.Now()
 	util.Debugf("rpc: sent call %v", call.Msg)
@@ -216,8 +216,8 @@ func (c *Client) input() {
 		call, err := c.readRPCCall()
 		if call != nil {
 			call.response_time = time.Now()
-			metrics.RpcRequestLatencyuS.Observe(float64(call.response_time.Sub(call.send_time).Microseconds()))
-			metrics.RpcOutstandingRequests.Dec()
+			metrics.MH["RpcRequestLatencyuS"].Observe(float64(call.response_time.Sub(call.send_time).Microseconds()))
+
 		}
 
 		if call == nil {
