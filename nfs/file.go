@@ -196,7 +196,7 @@ func (v *Target) Open(path string) (*File, error) {
 	return f, nil
 }
 
-func min(x, y uint32) uint32 {
+func min(x, y uint64) uint64 {
 	if x > y {
 		return y
 	}

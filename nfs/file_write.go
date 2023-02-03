@@ -101,8 +101,8 @@ func (f *File) ReadFrom(r io.Reader) (int64, error) {
 	wg.Add(3)
 
 	// Read rpc replies
-	written_confirmed := uint32(0)
-	written_sent := uint32(0)
+	var written_confirmed atomic.Uint64
+	var written_sent atomic.Uint64
 
 	// get rpc write replies
 	go func() {
@@ -116,15 +116,15 @@ func (f *File) ReadFrom(r io.Reader) (int64, error) {
 
 			// process the write response
 			writeres := f.process_write_response(rpccall)
-			atomic.AddUint32(&written_confirmed, writeres.Count)
+			written_confirmed.Add(uint64(writeres.Count))
 			
 			recieved_rpc_repies.Add(1)
 
-			if all_sent.Load() && total_rpc_calls.Load() <= recieved_rpc_repies.Load() {
+			if all_sent.Load() && (total_rpc_calls.Load() <= recieved_rpc_repies.Load()) {
 				break
 			}
 
-			if all_sent.Load() && written_confirmed >= written_sent {
+			if all_sent.Load() && written_confirmed.Load() >= written_sent.Load() {
 				break
 			}
 		}
@@ -138,19 +138,19 @@ func (f *File) ReadFrom(r io.Reader) (int64, error) {
 		defer wg.Done()
 
 		for chunk := range chunk_chan {
-			totalToWrite := uint32(len(chunk))
+			totalToWrite := uint64(len(chunk))
 
-			for written := uint32(0); written < totalToWrite; {
+			for written := uint64(0); written < totalToWrite; {
 				rpc_sending_chan <- true // will rate limit outstanding RPCs based on buff depth
-
-				total_rpc_calls.Add(1)
-				writeSize := min(f.max_write_size, totalToWrite-written)
+				writeSize := min(uint64(f.max_write_size), totalToWrite-written)
 				
 				//use the async write call to send the call
 				f.send_write_rpc(chunk[written:written+writeSize], int(f.curr), rpc_reply_chan)
+				written_sent.Add(writeSize)
+				total_rpc_calls.Add(1)
+
 				f.curr += uint64(writeSize)
 				written += writeSize
-				atomic.AddUint32(&written_sent, writeSize)
 			}
 		}
 		util.Debugf("NFS File ReadFrom: done sending RPCs")
@@ -183,7 +183,7 @@ func (f *File) ReadFrom(r io.Reader) (int64, error) {
 	}()
 
 	wg.Wait()
-	return int64(written_confirmed), nil
+	return int64(written_confirmed.Load()), nil
 }
 
 // Write entire buffer to file, will loop until all data is written
