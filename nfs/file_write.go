@@ -94,15 +94,15 @@ func (f *File) ReadFrom(r io.Reader) (int64, error) {
 
 	var recieved_rpc_repies atomic.Int32
 	var total_rpc_calls atomic.Int32
-	var all_sent atomic.Bool
+	
+	var all_sent atomic.Bool  
 
 	wg := sync.WaitGroup{}
 	wg.Add(3)
 
 	// Read rpc replies
 	written_confirmed := uint32(0)
-	all_rpc_replies_received := sync.WaitGroup{}
-	all_rpc_replies_received.Add(1)
+	written_sent := uint32(0)
 
 	// get rpc write replies
 	go func() {
@@ -116,10 +116,15 @@ func (f *File) ReadFrom(r io.Reader) (int64, error) {
 
 			// process the write response
 			writeres := f.process_write_response(rpccall)
-			written_confirmed += writeres.Count
-
+			atomic.AddUint32(&written_confirmed, writeres.Count)
+			
 			recieved_rpc_repies.Add(1)
-			if all_sent.Load() && uint64(written_confirmed) == f.curr {
+
+			if all_sent.Load() && total_rpc_calls.Load() <= recieved_rpc_repies.Load() {
+				break
+			}
+
+			if all_sent.Load() && written_confirmed >= written_sent {
 				break
 			}
 		}
@@ -127,7 +132,7 @@ func (f *File) ReadFrom(r io.Reader) (int64, error) {
 	}()
 
 	// Send RPC requests
-	//written := uint32(0)
+	
 	go func() {
 		defer all_sent.Store(true)
 		defer wg.Done()
@@ -144,7 +149,8 @@ func (f *File) ReadFrom(r io.Reader) (int64, error) {
 				//use the async write call to send the call
 				f.send_write_rpc(chunk[written:written+writeSize], int(f.curr), rpc_reply_chan)
 				f.curr += uint64(writeSize)
-				written += uint32(writeSize)
+				written += writeSize
+				atomic.AddUint32(&written_sent, writeSize)
 			}
 		}
 		util.Debugf("NFS File ReadFrom: done sending RPCs")

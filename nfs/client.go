@@ -21,7 +21,7 @@ type Client struct {
 
 
 // NewClient creates a new NFS client
-func NewClient(addr string, mount_point string) (*Client, error) {
+func NewNFSClient(addr string, mount_point string) (*Client, error) {
 
 
 	// Try and mount to verify
